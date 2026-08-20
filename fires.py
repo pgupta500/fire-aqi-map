@@ -38,7 +38,7 @@ def _build_url(map_key: str, bbox: str, day_range: int) -> str:
     return f"{FIRMS_BASE}/{map_key}/{FIRMS_SOURCE}/{bbox}/{day_range}"
 
 
-def get_fires(bbox: str = INDIA_BBOX, day_range: int = 1) -> pd.DataFrame:
+def get_fires(bbox: str = INDIA_BBOX, day_range: int = 5) -> pd.DataFrame:
     """
     Fetch active fire detections from NASA FIRMS for a bounding box.
 
@@ -48,8 +48,8 @@ def get_fires(bbox: str = INDIA_BBOX, day_range: int = 1) -> pd.DataFrame:
     Returns a validated DataFrame. RAISES FireDataError on anything wrong.
     """
     # ---- guard the inputs before we even call out ----
-    if not 1 <= day_range <= 10:
-        raise FireDataError(f"day_range must be 1-10, got {day_range}")
+    if not 1 <= day_range <= 5:
+        raise FireDataError(f"day_range must be 1-5, got {day_range}")
 
     map_key = os.environ.get("FIRMS_MAP_KEY")
     if not map_key:
@@ -116,8 +116,8 @@ def _validate(df: pd.DataFrame) -> None:
 if __name__ == "__main__":
     # Quick manual test. Needs a real FIRMS_MAP_KEY in .env.
     try:
-        fires = get_fires(day_range=1)
-        print(f"OK: {len(fires)} fire detections for India in the last day.")
+        fires = get_fires()
+        print(f"OK: {len(fires)} fire detections for India in the last 5 days.")
         print(fires[REQUIRED_COLUMNS].head())
     except FireDataError as e:
         print(f"FireDataError: {e}")
