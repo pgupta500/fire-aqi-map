@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>India Fire Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
+    #map { height: 100vh; width: 100%; }
+    #panel {
+      position: absolute; top: 12px; left: 12px; z-index: 1000;
+      background: rgba(20, 20, 20, 0.85); color: #fff;
+      padding: 10px 14px; border-radius: 8px; font-size: 14px; line-height: 1.4;
+    }
+    #panel strong { font-size: 16px; }
+  </style>
+</head>
+<body>
+  <div id="panel">Loading fires…</div>
+  <div id="map"></div>
+  <script>
+    const map = L.map("map").setView([22, 80], 5);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "© OpenStreetMap contributors", maxZoom: 19,
+    }).addTo(map);
+
+    function colorForFrp(frp) {
+      if (frp >= 20) return "#b30000";
+      if (frp >= 10) return "#e34a33";
+      if (frp >= 5)  return "#fc8d59";
+      return "#fdcc8a";
+    }
+
+    fetch("/api/fires")
+      .then((res) => {
+        if (!res.ok) throw new Error("Backend returned " + res.status);
+        return res.json();
+      })
+      .then((fires) => {
+        if (fires.error) throw new Error(fires.error);
+        fires.forEach((f) => {
+          L.circleMarker([f.latitude, f.longitude], {
+            radius: 4, color: colorForFrp(f.frp), fillColor: colorForFrp(f.frp),
+            fillOpacity: 0.8, weight: 1,
+          })
+            .bindPopup(
+              `<b>Fire detection</b><br>Date: ${f.acq_date}<br>` +
+              `Intensity (FRP): ${f.frp}<br>Confidence: ${f.confidence}`
+            )
+            .addTo(map);
+        });
+        document.getElementById("panel").innerHTML =
+          `<strong>${fires.length}</strong> fire detections<br>India · last 5 days`;
+      })
+      .catch((err) => {
+        document.getElementById("panel").textContent =
+          "Could not load fires: " + err.message;
+      });
+  </script>
+</body>
+</html>
