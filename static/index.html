@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>India Fire Map</title>
+  <title>India Fire & Air Quality Map</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
@@ -12,13 +12,21 @@
     #panel {
       position: absolute; top: 60px; right: 12px; z-index: 1000;
       background: rgba(20, 20, 20, 0.85); color: #fff;
-      padding: 10px 14px; border-radius: 8px; font-size: 14px; line-height: 1.4;
+      padding: 10px 14px; border-radius: 8px; font-size: 14px; line-height: 1.5;
     }
     #panel strong { font-size: 16px; }
+    #legend {
+      position: absolute; bottom: 20px; left: 12px; z-index: 1000;
+      background: rgba(20, 20, 20, 0.85); color: #fff;
+      padding: 10px 14px; border-radius: 8px; font-size: 12px; line-height: 1.6;
+    }
+    .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+      margin-right: 6px; vertical-align: middle; }
   </style>
 </head>
 <body>
-  <div id="panel">Loading fires...</div>
+  <div id="panel">Loading...</div>
+  <div id="legend"></div>
   <div id="map"></div>
   <script>
     const map = L.map("map").setView([22, 80], 5);
@@ -27,16 +35,18 @@
       "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
       { attribution: "(c) OpenStreetMap contributors", maxZoom: 19 }
     );
-
     const satellite = L.tileLayer(
       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-      { attribution: "Imagery (c) Esri, Maxar, Earthstar Geographics", maxZoom: 19 }
+      { attribution: "Imagery (c) Esri", maxZoom: 19 }
     );
-
     satellite.addTo(map);
 
+    const fireLayer = L.layerGroup().addTo(map);
+    const aqiLayer = L.layerGroup().addTo(map);
+
     L.control.layers(
-      { "Satellite": satellite, "Street map": streets }
+      { "Satellite": satellite, "Street map": streets },
+      { "Fires": fireLayer, "Air quality (PM2.5)": aqiLayer }
     ).addTo(map);
 
     function colorForFrp(frp) {
@@ -46,31 +56,66 @@
       return "#ffe066";
     }
 
+    function colorForPm25(v) {
+      if (v > 250) return "#7e0023";
+      if (v > 120) return "#660099";
+      if (v > 90)  return "#ff0000";
+      if (v > 60)  return "#ff7e00";
+      if (v > 30)  return "#ffff00";
+      return "#00b050";
+    }
+
+    let fireCount = 0, aqiCount = 0;
+
     fetch("/api/fires")
-      .then((res) => {
-        if (!res.ok) throw new Error("Backend returned " + res.status);
-        return res.json();
-      })
+      .then((r) => r.json())
       .then((fires) => {
         if (fires.error) throw new Error(fires.error);
+        fireCount = fires.length;
         fires.forEach((f) => {
           L.circleMarker([f.latitude, f.longitude], {
             radius: 4, color: colorForFrp(f.frp), fillColor: colorForFrp(f.frp),
             fillOpacity: 0.9, weight: 1,
-          })
-            .bindPopup(
-              "<b>Fire detection</b><br>Date: " + f.acq_date + "<br>" +
-              "Intensity (FRP): " + f.frp + "<br>Confidence: " + f.confidence
-            )
-            .addTo(map);
+          }).bindPopup(
+            "<b>Fire</b><br>Date: " + f.acq_date +
+            "<br>Intensity (FRP): " + f.frp
+          ).addTo(fireLayer);
         });
-        document.getElementById("panel").innerHTML =
-          "<strong>" + fires.length + "</strong> fire detections<br>India - last 5 days";
+        updatePanel();
       })
-      .catch((err) => {
-        document.getElementById("panel").textContent =
-          "Could not load fires: " + err.message;
-      });
+      .catch((e) => { document.getElementById("panel").textContent = "Fire error: " + e.message; });
+
+    fetch("/api/aqi")
+      .then((r) => r.json())
+      .then((stations) => {
+        if (stations.error) throw new Error(stations.error);
+        aqiCount = stations.length;
+        stations.forEach((s) => {
+          L.circleMarker([s.latitude, s.longitude], {
+            radius: 6, color: "#222", fillColor: colorForPm25(s.pm25),
+            fillOpacity: 0.85, weight: 1,
+          }).bindPopup(
+            "<b>Air quality station</b><br>PM2.5: " + s.pm25 + " ug/m3"
+          ).addTo(aqiLayer);
+        });
+        updatePanel();
+      })
+      .catch((e) => { console.log("AQI error:", e.message); });
+
+    function updatePanel() {
+      document.getElementById("panel").innerHTML =
+        "<strong>" + fireCount + "</strong> fires<br>" +
+        "<strong>" + aqiCount + "</strong> air quality stations<br>India";
+    }
+
+    document.getElementById("legend").innerHTML =
+      "<b>Fire intensity</b><br>" +
+      "<span class='swatch' style='background:#ffe066'></span>low " +
+      "<span class='swatch' style='background:#ff2a00'></span>high<br>" +
+      "<b>PM2.5 (air quality)</b><br>" +
+      "<span class='swatch' style='background:#00b050'></span>good " +
+      "<span class='swatch' style='background:#ff7e00'></span>moderate " +
+      "<span class='swatch' style='background:#7e0023'></span>severe";
   </script>
 </body>
 </html>
