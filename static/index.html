@@ -378,14 +378,15 @@
   };
 
   // ------------------------------------------------------------------ map
-  const map = L.map("map", { zoomControl: false, preferCanvas: true, minZoom: 4, maxZoom: 12, worldCopyJump: false })
+  const map = L.map("map", { zoomControl: false, preferCanvas: true, minZoom: 4, maxZoom: 12, worldCopyJump: false,
+    maxBounds: [[-2, 55], [44, 110]], maxBoundsViscosity: 0.8, zoomSnap: 0.25 })
     .setView([23, 80], 5);
   L.control.zoom({ position: "topright" }).addTo(map);
   const isMobile = () => window.innerWidth <= 820;
-  const INDIA = L.latLngBounds([[7, 68], [35.5, 97.5]]);
+  const INDIA = L.latLngBounds([[8, 68.5], [35, 97]]);
   map.fitBounds(INDIA, isMobile()
     ? { paddingTopLeft: [10, 60], paddingBottomRight: [10, Math.round(window.innerHeight * 0.46) + 60], animate: false }
-    : { paddingTopLeft: [430, 30], paddingBottomRight: [30, 30], animate: false });
+    : { paddingTopLeft: [420, 10], paddingBottomRight: [10, 10], animate: false });
 
   map.createPane("labels"); map.getPane("labels").style.zIndex = 640; map.getPane("labels").style.pointerEvents = "none";
   map.createPane("flowsPane"); map.getPane("flowsPane").style.zIndex = 420;
@@ -397,7 +398,7 @@
   const esri = (svc, opts = {}) => L.tileLayer(`https://server.arcgisonline.com/ArcGIS/rest/services/${svc}/MapServer/tile/{z}/{y}/{x}`,
     Object.assign({ maxZoom: 16, attribution: "Basemap &copy; Esri" }, opts));
   const bases = {
-    dark: [esri("Canvas/World_Dark_Gray_Base"), esri("Canvas/World_Dark_Gray_Reference", { pane: "labels", opacity: 0.8, attribution: "" })],
+    dark: [esri("Canvas/World_Dark_Gray_Base"), esri("Canvas/World_Dark_Gray_Reference", { pane: "labels", opacity: 0.55, attribution: "" })],
     light: [esri("Canvas/World_Light_Gray_Base"), esri("Canvas/World_Light_Gray_Reference", { pane: "labels", attribution: "" })],
     sat: [esri("World_Imagery", { maxZoom: 18, attribution: "Imagery &copy; Esri" }),
           esri("Reference/World_Boundaries_and_Places", { pane: "labels", opacity: 0.85, attribution: "" })],
@@ -577,7 +578,8 @@
   // ---- fires
   function renderFires(highlightRegion = null) {
     L_fires.clearLayers();
-    const r = map.getZoom() >= 7 ? 3.2 : 2.2;
+    const z = map.getZoom();
+    const r = z >= 7 ? 3.2 : z >= 6 ? 2.4 : z >= 5 ? 1.8 : 1.4;
     for (const f of state.fires) {
       L.circleMarker([f.latitude, f.longitude], {
         radius: r, stroke: false, fillColor: fireColor(f.frp), fillOpacity: 0.75, interactive: false,
@@ -588,12 +590,14 @@
   // ---- stations
   function renderStations(stations) {
     L_stations.clearLayers();
-    const r = map.getZoom() >= 7 ? 7 : 5.5;
+    const z = map.getZoom();
+    const r = z >= 8 ? 7.5 : z >= 7 ? 6.5 : z >= 6 ? 5 : z >= 5 ? 3.6 : 2.8;
+    const ring = z >= 6 ? 2 : 1.3;
     const sorted = [...stations].sort((a, b) => a.pm25 - b.pm25); // worst on top
     for (const s of sorted) {
       const m = L.circleMarker([s.latitude, s.longitude], {
         radius: r, fillColor: naqiColor(s.pm25), fillOpacity: 0.95,
-        color: s.smoke_affected ? "#ff7a1a" : "rgba(0,0,0,0.65)", weight: s.smoke_affected ? 2.2 : 1,
+        color: s.smoke_affected ? "#ff7a1a" : "rgba(0,0,0,0.55)", weight: s.smoke_affected ? ring : 0.6,
       });
       m.bindTooltip(() => `<b>${fmtInt(s.pm25)} µg/m³</b> · ${esc(s.category)}<br>${s.name ? esc(s.name) + ", " : ""}${esc(s.region)}` +
         (s.top_source && s.upwind_score >= 25 ? `<br><span style="color:#ffb347">${pct(s.top_source_share)} of fire smoke from ${esc(s.top_source)}</span>` : ""),
@@ -845,9 +849,11 @@
       return [bl(u), bl(v)];
     }
     function spawn(p) {
-      const b = map.getBounds();
-      p.lat = b.getSouth() + Math.random() * (b.getNorth() - b.getSouth());
-      p.lon = b.getWest() + Math.random() * (b.getEast() - b.getWest());
+      const b = map.getBounds(), { lats, lons } = field;
+      const s = Math.max(b.getSouth(), lats[0]), n = Math.min(b.getNorth(), lats[lats.length - 1]);
+      const w = Math.max(b.getWest(), lons[0]), e = Math.min(b.getEast(), lons[lons.length - 1]);
+      p.lat = s + Math.random() * Math.max(0, n - s);
+      p.lon = w + Math.random() * Math.max(0, e - w);
       p.age = Math.floor(Math.random() * 80);
       return p;
     }
@@ -864,11 +870,14 @@
       ctx.fillStyle = "rgba(0,0,0,0.92)";
       ctx.fillRect(0, 0, s.x, s.y);
       ctx.globalCompositeOperation = "source-over";
-      ctx.lineWidth = 1.1;
-      ctx.strokeStyle = currentBase === "light" ? "rgba(40,70,110,0.55)" : "rgba(210,232,255,0.5)";
-      ctx.beginPath();
+      ctx.lineWidth = 1;
+      const rgb = currentBase === "light" ? "40,70,110" : "210,232,255";
       const ppd = 256 * Math.pow(2, map.getZoom()) / 360; // pixels per degree (approx.)
       const k = 0.32 / ppd;
+      const { lats, lons } = field;
+      const step = lats[1] - lats[0];
+      // Particles fade out over the last ~6 degrees before the edge of the wind data.
+      const buckets = [[], [], [], []];
       for (const p of parts) {
         const uv = sample(p.lat, p.lon);
         if (!uv || ++p.age > 90) { spawn(p); continue; }
@@ -876,9 +885,18 @@
         p.lon += uv[0] * k / Math.cos(p.lat * Math.PI / 180);
         p.lat += uv[1] * k;
         const b = map.latLngToContainerPoint([p.lat, p.lon]);
-        ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+        const edge = Math.min(p.lat - lats[0], lats[lats.length - 1] - p.lat, p.lon - lons[0], lons[lons.length - 1] - p.lon) / (3 * step);
+        const bi = Math.max(0, Math.min(3, Math.floor(edge * 4)));
+        if (edge <= 0) continue;
+        buckets[bi].push(a.x, a.y, b.x, b.y);
       }
-      ctx.stroke();
+      buckets.forEach((seg, i) => {
+        if (!seg.length) return;
+        ctx.strokeStyle = `rgba(${rgb},${(0.08 + 0.1 * i).toFixed(2)})`;
+        ctx.beginPath();
+        for (let j = 0; j < seg.length; j += 4) { ctx.moveTo(seg[j], seg[j + 1]); ctx.lineTo(seg[j + 2], seg[j + 3]); }
+        ctx.stroke();
+      });
       raf = requestAnimationFrame(frame);
     }
     function start() {
