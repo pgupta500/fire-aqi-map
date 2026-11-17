@@ -275,3 +275,82 @@ def test_api_wind_and_regions(demo_client):
     assert len(w["u"]) == len(w["lats"]) and len(w["u"][0]) == len(w["lons"])
     g = demo_client.get("/api/regions").get_json()
     assert g["type"] == "FeatureCollection" and len(g["features"]) > 40
+
+
+# ---- server rate-limited: browser-supplied wind ------------------------------
+
+def _client_payload(step=None):
+    import wind
+    lats, lons = wind.grid_axes()
+    t0 = (np.datetime64("now", "h") - np.timedelta64(96, "h")).astype("datetime64[s]")
+    nt = 120
+    u0, v0 = speed_dir_to_uv(4.0, 315)
+    return {"lats": lats.tolist(), "lons": lons.tolist(), "t0": str(t0),
+            "u": np.full((nt, len(lats), len(lons)), round(float(u0), 2)).tolist(),
+            "v": np.full((nt, len(lats), len(lons)), round(float(v0), 2)).tolist()}
+
+
+@pytest.fixture
+def limited_client(monkeypatch):
+    """Real-data mode where Open-Meteo always rate-limits the server."""
+    import app as app_module
+    from wind import WindDataError as WDE
+    stations, fires = _scene()
+    now = str(np.datetime64("now", "h")) + ":00:00Z"
+    stations["datetime_utc"] = now
+    fires["acq_date"] = str(np.datetime64("now", "D"))
+    app_module._cache.clear(); app_module._wind_cache.clear(); app_module._client_winds.clear()
+    app_module._wind_failed.update(at=float("-inf"), msg="")
+    calls = []
+
+    def limited():
+        calls.append(1)
+        raise WDE("Open-Meteo returned HTTP 429: Daily API request limit exceeded")
+
+    monkeypatch.setattr(app_module, "DEMO_MODE", False)
+    monkeypatch.setattr(app_module, "get_wind", limited)
+    monkeypatch.setattr(app_module, "get_air_quality", lambda: stations)
+    monkeypatch.setattr(app_module, "get_fires", lambda day_range=5: fires)
+    app_module.app.config["TESTING"] = True
+    return app_module.app.test_client(), calls
+
+
+def test_rate_limited_server_asks_browser_for_wind(limited_client):
+    c, calls = limited_client
+    r = c.get("/api/attribution")
+    assert r.status_code == 503
+    body = r.get_json()
+    assert body["wind_unavailable"] is True
+    assert len(body["wind_grid"]["lats"]) * len(body["wind_grid"]["lons"]) <= 400
+    # Backoff: a second request doesn't hit Open-Meteo again.
+    assert c.get("/api/attribution").status_code == 503
+    assert len(calls) == 1
+
+
+def test_browser_wind_is_used_and_keyed(limited_client):
+    c, _ = limited_client
+    r = c.post("/api/attribution?hours=48", json={"wind": _client_payload()})
+    assert r.status_code == 200, r.get_json()
+    d = r.get_json()
+    assert d["summary"]["wind_from_browser"] is True and d["wind_key"]
+    delhi = next(s for s in d["stations"] if s["region"] == "Delhi")
+    assert delhi["upwind_score"] > 0
+    det = c.get(f"/api/station/{delhi['station_id']}?hours=48&wind_key={d['wind_key']}")
+    assert det.status_code == 200 and det.get_json()["path"]
+    assert c.get(f"/api/wind?wind_key={d['wind_key']}").status_code == 200
+    # Unknown keys are refused rather than silently using other wind.
+    assert c.get("/api/station/0?wind_key=nope").status_code == 409
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda p: p.update(lats=p["lats"][:-1]),                       # wrong grid
+    lambda p: p.update(t0="2001-01-01T00:00:00"),                  # stale
+    lambda p: p["u"][0][0].__setitem__(0, 999.0),                  # impossible speed
+    lambda p: p.update(u=p["u"][:5], v=p["v"][:5]),                # too few hours
+    lambda p: p.pop("v"),                                          # missing field
+])
+def test_bad_browser_wind_is_rejected(limited_client, mutate):
+    c, _ = limited_client
+    p = _client_payload()
+    mutate(p)
+    assert c.post("/api/attribution", json={"wind": p}).status_code == 400

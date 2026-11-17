@@ -22,7 +22,7 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 # monitors (and smoke arriving from Iran/Central Asia/Myanmar) stay inside.
 GRID_WEST, GRID_EAST = 52.5, 105.0
 GRID_SOUTH, GRID_NORTH = -5.0, 45.0
-GRID_STEP = float(os.environ.get("WIND_GRID_STEP", 2.5))
+GRID_STEP = float(os.environ.get("WIND_GRID_STEP", 3.0))  # 17 x 18 = 306 points
 
 # Coarse worldwide grid, only used to draw the wind animation everywhere.
 # 15 degrees = 264 points. Open-Meteo's free tier allows ~600 locations per
@@ -226,6 +226,50 @@ def parse_response(payload, lats, lons) -> WindField:
         raise WindDataError("Open-Meteo returned fewer than 2 hourly steps")
     return WindField(lats=np.asarray(lats, float), lons=np.asarray(lons, float),
                      times=times, u=u, v=v)
+
+
+def grid_spec(step: float = GRID_STEP) -> dict:
+    """Everything a browser needs to request the same wind grid itself."""
+    lats, lons = grid_axes(step)
+    return {
+        "url": OPEN_METEO_URL,
+        "lats": lats.tolist(),
+        "lons": lons.tolist(),
+        "hourly": HOURLY_VARS,
+        "past_days": PAST_DAYS,
+        "high_terrain_m": HIGH_TERRAIN_M,
+        "max_locations_per_request": MAX_LOCATIONS_PER_REQUEST,
+    }
+
+
+def wind_from_client(payload: dict, step: float = GRID_STEP) -> WindField:
+    """
+    Build a WindField from wind the browser fetched from Open-Meteo itself
+    (used when the server's shared IP is rate-limited). Validated strictly:
+    it must be exactly our grid, hourly, finite and physically plausible.
+    """
+    try:
+        lats = np.asarray(payload["lats"], dtype=float)
+        lons = np.asarray(payload["lons"], dtype=float)
+        t0 = np.datetime64(str(payload["t0"]).rstrip("Z"), "s")
+        u = np.asarray(payload["u"], dtype=float)
+        v = np.asarray(payload["v"], dtype=float)
+    except (KeyError, TypeError, ValueError) as e:
+        raise WindDataError(f"Malformed client wind: {e}") from e
+    exp_lats, exp_lons = grid_axes(step)
+    if lats.shape != exp_lats.shape or lons.shape != exp_lons.shape \
+            or not np.allclose(lats, exp_lats) or not np.allclose(lons, exp_lons):
+        raise WindDataError("Client wind is not on the expected grid")
+    nt = u.shape[0] if u.ndim == 3 else 0
+    if not (24 <= nt <= 24 * 8) or u.shape != (nt, len(lats), len(lons)) or v.shape != u.shape:
+        raise WindDataError("Client wind has the wrong shape")
+    if not (np.isfinite(u).all() and np.isfinite(v).all()) or np.abs(u).max() > 120 or np.abs(v).max() > 120:
+        raise WindDataError("Client wind has invalid values")
+    now = np.datetime64("now", "s")
+    if not (now - np.timedelta64(10, "D") <= t0 <= now + np.timedelta64(1, "D")):
+        raise WindDataError("Client wind is not recent")
+    times = t0 + (np.arange(nt) * 3600).astype("timedelta64[s]")
+    return WindField(lats=lats, lons=lons, times=times, u=u, v=v)
 
 
 def get_wind(step: float = GRID_STEP) -> WindField:

@@ -11,12 +11,12 @@ Every winter, stubble burning across Punjab and Haryana coincides with some of t
 - **Smoke exporters ledger.** Indian states, Pakistani provinces, Bangladeshi divisions and the other South Asian countries are ranked by how much of their fire smoke reached *other* regions' monitors, with where it went (for example "→ Delhi 41%" means 41% of Delhi's fire smoke came from that state).
 - **Smoke flow arcs.** Animated arcs on the map, from source region to receiving region, sized by the amount of smoke.
 - **Monitor deep-dive.** Click any monitor to draw the path its air took over the last 24–48 h. You see the credited fires sized by contribution, the source mix ("70% Punjab · 16% Haryana · 14% Punjab (Pakistan)"), and how much was imported versus local.
-- **Live wind, worldwide.** An earth.nullschool-style animated wind field covering the whole globe (fine 2.5° grid over South Asia blended into a 10° world grid), plus satellite fires and PM2.5 monitors colored by India's NAQI bands.
+- **Live wind, worldwide.** An earth.nullschool-style animated wind field covering the whole globe (3° grid over South Asia blended into a 15° world grid fetched by the browser), plus satellite fires and PM2.5 monitors colored by India's NAQI bands.
 - **Honest comparison.** The Method tab compares the wind-aware score with a distance-only baseline (fires within 150 km), so you can see whether following the wind explains PM2.5 better.
 
 ## How the attribution works
 
-1. **Wind field.** Hourly wind from [Open-Meteo](https://open-meteo.com) (free, no key) on a 2.5° grid from Iran to Myanmar. Transport wind is the mean of the 10 m and 925 hPa (~750 m) winds, a proxy for the boundary layer where smoke travels. Over high terrain only 10 m is used.
+1. **Wind field.** Hourly wind from [Open-Meteo](https://open-meteo.com) (free, no key) on a 3° grid from Iran to Myanmar. Transport wind is the mean of the 10 m and 925 hPa (~750 m) winds, a proxy for the boundary layer where smoke travels. Over high terrain only 10 m is used.
 2. **Back-trajectories.** Starting at each monitor at the time of its reading, the model integrates backwards in 1 h midpoint (RK2) steps for 24 or 48 h. This is the same idea as NOAA's HYSPLIT, simplified to one level.
 3. **Crediting fires.** Fire detections are clustered (about 10 km, 1 h) and matched to path points with a KD-tree:
 
@@ -54,15 +54,24 @@ Free API keys:
 | Endpoint | Description |
 |---|---|
 | `GET /api/attribution?days=1-5&hours=12-72` | `{summary, ledger, flows, stations}`: the wind-aware accountability analysis |
+| `POST /api/attribution` | Same, using wind the browser fetched (`{"wind": {lats, lons, t0, u, v}}`); see below |
 | `GET /api/station/<id>?days=&hours=` | One monitor's back-trajectory path and its credited fires |
-| `GET /api/wind` | Current-hour wind (u/v, m/s): `regional` South Asia grid + `world` 10° grid |
+| `GET /api/wind` | Current-hour South Asia wind (u/v, m/s) |
 | `GET /api/regions` | State/province boundaries (GeoJSON) |
 | `GET /api/fires?days=1-5` | FIRMS fire detections |
 | `GET /api/aqi` | OpenAQ PM2.5 monitors in South Asia (with station names) |
 | `GET /api/analysis?days=&radius_km=` | Distance-only baseline (no wind) |
 | `GET /api/health` | Liveness check and which keys are configured |
 
-Upstream data and analysis results are cached in memory for `CACHE_TTL_SECONDS` (default 30 min). Concurrent requests share one computation, and failures are never cached. Wind is cached longer (3 h regional, 6 h worldwide) to stay well inside Open-Meteo's free quota. A full run (about 1,500 monitors and 20k+ fires) takes about 1 s of CPU.
+Upstream data and analysis results are cached in memory for `CACHE_TTL_SECONDS` (default 30 min). Concurrent requests share one computation, and failures are never cached. Wind is cached for 6 h on a 3° grid (306 points). A full run (about 1,500 monitors and 20k+ fires) takes about 1 s of CPU.
+
+### Open-Meteo rate limits
+
+Open-Meteo's free tier allows 10,000 location lookups per day **per IP**, and free hosts like Render share IPs between many apps. So:
+
+- The server caches wind for 6 h and, after an Open-Meteo error, waits 10 minutes before asking again.
+- If the server is rate-limited, `/api/attribution` returns `503` with the exact wind grid. The page then fetches that wind from Open-Meteo **from the visitor's own browser** and POSTs it back. The server validates it strictly (exact grid, hourly, recent, plausible speeds) and keys it by a content hash, so one visitor can't change what others see.
+- The worldwide wind animation is always fetched by the browser (cached there for 3 h).
 
 ## Deploy (Render, free tier)
 
