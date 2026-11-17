@@ -52,7 +52,7 @@ def get_air_quality() -> pd.DataFrame:
 
     Returns:
         A validated DataFrame with columns:
-        latitude, longitude, pm25, datetime_utc.
+        latitude, longitude, pm25, datetime_utc, location_id.
 
     Raises:
         AQIDataError: If the requests fail or no valid India data is found.
@@ -87,7 +87,38 @@ def get_air_quality() -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     _validate(df)
+    df["name"] = df["location_id"].map(_location_names())
     return df
+
+
+def _location_names() -> dict:
+    """
+    {location_id: station name} for monitors in India, e.g.
+    "Anand Vihar, Delhi - DPCC". Names are a nice-to-have, so any failure
+    here just returns {} instead of breaking the air quality layer.
+    """
+    b = INDIA_BOUNDS
+    bbox = f"{b['west']},{b['south']},{b['east']},{b['north']}"
+    names = {}
+    try:
+        for page in range(1, 6):
+            resp = requests.get(
+                f"{OPENAQ_BASE}/locations",
+                headers=_headers(),
+                params={"bbox": bbox, "limit": PAGE_SIZE, "page": page},
+                timeout=30,
+            )
+            if resp.status_code != 200:
+                break
+            results = resp.json().get("results") or []
+            for loc in results:
+                if loc.get("id") is not None and loc.get("name"):
+                    names[loc["id"]] = str(loc["name"]).strip()
+            if len(results) < PAGE_SIZE:
+                break
+    except (requests.RequestException, ValueError, AQIDataError):
+        return names
+    return names
 
 
 def _clean(results: list) -> list:
@@ -118,7 +149,13 @@ def _clean(results: list) -> list:
             continue
 
         rows.append(
-            {"latitude": lat, "longitude": lon, "pm25": value, "datetime_utc": dt}
+            {
+                "latitude": lat,
+                "longitude": lon,
+                "pm25": value,
+                "datetime_utc": dt,
+                "location_id": r.get("locationsId"),
+            }
         )
 
     return rows

@@ -174,4 +174,4 @@ def test_api_upstream_error(client, monkeypatch):
 
 def test_health_and_index(client):
     assert client.get("/api/health").get_json()["status"] == "ok"
-    assert b"India Fire" in client.get("/").data
+    assert b"SmokeTrail" in client.get("/").data

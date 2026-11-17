@@ -29,6 +29,9 @@ INDIA_BBOX = "68,6,98,38"
 # Columns the rest of the application depends on.
 REQUIRED_COLUMNS = ["latitude", "longitude", "acq_date", "confidence", "frp"]
 
+# Optional columns passed through when FIRMS provides them.
+OPTIONAL_COLUMNS = ["acq_time"]
+
 
 class FireDataError(Exception):
     """Raised when the FIRMS response is missing, malformed, or invalid."""
