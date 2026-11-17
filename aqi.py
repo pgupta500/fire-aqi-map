@@ -85,7 +85,7 @@ def get_air_quality() -> pd.DataFrame:
 
         rows.extend(_clean(results))
 
-    df = pd.DataFrame(rows)
+    df = _dedupe(pd.DataFrame(rows))
     _validate(df)
     df["name"] = df["location_id"].map(_location_names())
     return df
@@ -159,6 +159,22 @@ def _clean(results: list) -> list:
         )
 
     return rows
+
+
+def _dedupe(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    OpenAQ lists one row per *sensor*, so a station with two PM2.5 sensors
+    appears twice. Keep the newest reading per location.
+    """
+    if df.empty:
+        return df
+    key = df["location_id"].where(
+        df["location_id"].notna(),
+        df["latitude"].round(4).astype(str) + "," + df["longitude"].round(4).astype(str),
+    )
+    return (df.assign(_key=key).sort_values("datetime_utc")
+              .drop_duplicates("_key", keep="last").drop(columns="_key")
+              .reset_index(drop=True))
 
 
 def _validate(df: pd.DataFrame) -> None:

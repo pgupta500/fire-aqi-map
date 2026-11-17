@@ -88,3 +88,20 @@ def test_missing_key_raises(monkeypatch):
     monkeypatch.delenv("OPENAQ_API_KEY", raising=False)
     with pytest.raises(AQIDataError, match="OPENAQ_API_KEY"):
         aqi.get_air_quality()
+
+
+def test_duplicate_sensors_collapse_to_one_station(monkeypatch):
+    monkeypatch.setenv("OPENAQ_API_KEY", "test")
+    a = dict(reading(dt=iso(3)), locationsId=7)
+    b = dict(reading(value=200.0, dt=iso(1)), locationsId=7)   # newer
+    c = dict(reading(lat=19.0, lon=72.8), locationsId=8)
+
+    def fake_get(url, headers, params, timeout):
+        if url.endswith("/latest") and params["page"] == 1:
+            return FakeResp(200, {"results": [a, b, c]})
+        return FakeResp(404)
+
+    monkeypatch.setattr(aqi.requests, "get", fake_get)
+    df = aqi.get_air_quality()
+    assert len(df) == 2
+    assert df.loc[df["location_id"] == 7, "pm25"].item() == 200.0
