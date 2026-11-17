@@ -9,27 +9,62 @@
   <style>
     html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
     #map { height: 100vh; width: 100%; background: #000; }
-    #panel {
-      position: absolute; top: 60px; right: 12px; z-index: 1000;
-      background: rgba(20, 20, 20, 0.85); color: #fff;
-      padding: 10px 14px; border-radius: 8px; font-size: 14px; line-height: 1.5;
+    .box {
+      position: absolute; z-index: 1000;
+      background: rgba(20, 20, 20, 0.88); color: #fff;
+      padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.5;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
     }
-    #panel strong { font-size: 16px; }
-    #legend {
-      position: absolute; bottom: 20px; left: 12px; z-index: 1000;
-      background: rgba(20, 20, 20, 0.85); color: #fff;
-      padding: 10px 14px; border-radius: 8px; font-size: 12px; line-height: 1.6;
+    #panel { top: 60px; right: 12px; width: 290px; max-height: calc(100vh - 200px); overflow-y: auto; }
+    #panel h1 { font-size: 16px; margin: 0 0 6px; }
+    #panel h2 { font-size: 13px; margin: 10px 0 4px; color: #ffb366; text-transform: uppercase; letter-spacing: .04em; }
+    #panel .big { font-size: 18px; font-weight: 700; }
+    #panel .muted { color: #aaa; font-size: 11px; }
+    #panel .err { color: #ff8080; }
+    #controls label { display: block; margin-top: 4px; }
+    #controls select { width: 100%; margin-top: 2px; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; padding: 3px; }
+    #hotspots { list-style: none; padding: 0; margin: 0; }
+    #hotspots li { padding: 5px 6px; border-radius: 4px; cursor: pointer; border-bottom: 1px solid #333; }
+    #hotspots li:hover { background: #333; }
+    #legend { bottom: 20px; left: 12px; font-size: 12px; line-height: 1.6; }
+    .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 50%;
+              margin-right: 5px; vertical-align: middle; border: 1px solid #222; }
+    @media (max-width: 600px) {
+      #panel { top: auto; bottom: 10px; right: 10px; left: 10px; width: auto; max-height: 40vh; }
+      #legend { display: none; }
     }
-    .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 50%;
-      margin-right: 6px; vertical-align: middle; }
   </style>
 </head>
 <body>
-  <div id="panel">Loading...</div>
-  <div id="legend"></div>
+  <div id="panel" class="box">
+    <h1>India Fire &amp; Air Quality</h1>
+    <div id="controls">
+      <label>Fire window
+        <select id="days">
+          <option value="1">Last 24 hours</option>
+          <option value="3">Last 3 days</option>
+          <option value="5" selected>Last 5 days</option>
+        </select>
+      </label>
+      <label>Fire search radius around each station
+        <select id="radius">
+          <option value="50">50 km</option>
+          <option value="100">100 km</option>
+          <option value="150" selected>150 km</option>
+          <option value="250">250 km</option>
+        </select>
+      </label>
+    </div>
+    <div id="summary">Loading...</div>
+    <h2>Accountability hotspots</h2>
+    <div class="muted">Stations with Poor-or-worse PM2.5 and 5+ fires nearby, ranked by fire influence. Click to zoom.</div>
+    <ul id="hotspots"></ul>
+  </div>
+  <div id="legend" class="box"></div>
   <div id="map"></div>
+
   <script>
-    const map = L.map("map").setView([22, 80], 5);
+    const map = L.map("map", { preferCanvas: true }).setView([22, 80], 5);
 
     const streets = L.tileLayer(
       "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -37,85 +72,174 @@
     );
     const satellite = L.tileLayer(
       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-      { attribution: "Imagery (c) Esri", maxZoom: 19 }
+      { attribution: "Imagery (c) Esri | Fires: NASA FIRMS | PM2.5: OpenAQ", maxZoom: 19 }
     );
     satellite.addTo(map);
 
     const fireLayer = L.layerGroup().addTo(map);
     const aqiLayer = L.layerGroup().addTo(map);
+    const radiusLayer = L.layerGroup().addTo(map);
 
     L.control.layers(
       { "Satellite": satellite, "Street map": streets },
-      { "Fires": fireLayer, "Air quality (PM2.5)": aqiLayer }
+      { "Fires": fireLayer, "Air quality (PM2.5)": aqiLayer, "Search radius": radiusLayer }
     ).addTo(map);
 
     function colorForFrp(frp) {
       if (frp >= 20) return "#ff2a00";
       if (frp >= 10) return "#ff6a00";
-      if (frp >= 5)  return "#ffab00";
+      if (frp >= 5) return "#ffab00";
       return "#ffe066";
     }
 
+    // India NAQI 24-hour PM2.5 categories.
+    const NAQI = [
+      [30, "#00b050", "Good"],
+      [60, "#92d050", "Satisfactory"],
+      [90, "#ffff00", "Moderate"],
+      [120, "#ff7e00", "Poor"],
+      [250, "#ff0000", "Very Poor"],
+      [Infinity, "#7e0023", "Severe"],
+    ];
     function colorForPm25(v) {
-      if (v > 250) return "#7e0023";
-      if (v > 120) return "#660099";
-      if (v > 90)  return "#ff0000";
-      if (v > 60)  return "#ff7e00";
-      if (v > 30)  return "#ffff00";
-      return "#00b050";
+      for (const [upper, color] of NAQI) if (v <= upper) return color;
+      return "#7e0023";
     }
 
-    let fireCount = 0, aqiCount = 0;
-
-    fetch("/api/fires")
-      .then((r) => r.json())
-      .then((fires) => {
-        if (fires.error) throw new Error(fires.error);
-        fireCount = fires.length;
-        fires.forEach((f) => {
-          L.circleMarker([f.latitude, f.longitude], {
-            radius: 4, color: colorForFrp(f.frp), fillColor: colorForFrp(f.frp),
-            fillOpacity: 0.9, weight: 1,
-          }).bindPopup(
-            "<b>Fire</b><br>Date: " + f.acq_date +
-            "<br>Intensity (FRP): " + f.frp
-          ).addTo(fireLayer);
-        });
-        updatePanel();
-      })
-      .catch((e) => { document.getElementById("panel").textContent = "Fire error: " + e.message; });
-
-    fetch("/api/aqi")
-      .then((r) => r.json())
-      .then((stations) => {
-        if (stations.error) throw new Error(stations.error);
-        aqiCount = stations.length;
-        stations.forEach((s) => {
-          L.circleMarker([s.latitude, s.longitude], {
-            radius: 6, color: "#222", fillColor: colorForPm25(s.pm25),
-            fillOpacity: 0.85, weight: 1,
-          }).bindPopup(
-            "<b>Air quality station</b><br>PM2.5: " + s.pm25 + " ug/m3"
-          ).addTo(aqiLayer);
-        });
-        updatePanel();
-      })
-      .catch((e) => { console.log("AQI error:", e.message); });
-
-    function updatePanel() {
-      document.getElementById("panel").innerHTML =
-        "<strong>" + fireCount + "</strong> fires<br>" +
-        "<strong>" + aqiCount + "</strong> air quality stations<br>India";
+    function esc(v) {
+      return String(v ?? "").replace(/[&<>"']/g, (c) =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     }
+    function fmt(v, digits = 0) {
+      return v === null || v === undefined ? "n/a" : Number(v).toFixed(digits);
+    }
+
+    async function getJSON(url) {
+      const r = await fetch(url);
+      const data = await r.json().catch(() => ({ error: "Bad response from " + url }));
+      if (!r.ok || data.error) throw new Error(data.error || ("HTTP " + r.status));
+      return data;
+    }
+
+    function drawFires(fires) {
+      fireLayer.clearLayers();
+      fires.forEach((f) => {
+        L.circleMarker([f.latitude, f.longitude], {
+          radius: 3.5, color: colorForFrp(f.frp), fillColor: colorForFrp(f.frp),
+          fillOpacity: 0.9, weight: 1,
+        }).bindPopup(
+          "<b>Fire detection</b><br>Date: " + esc(f.acq_date) +
+          "<br>Intensity (FRP): " + esc(f.frp) + " MW" +
+          "<br>Confidence: " + esc(f.confidence)
+        ).addTo(fireLayer);
+      });
+    }
+
+    function stationPopup(s, radiusKm) {
+      return "<b>Air quality station</b><br>" +
+        "PM2.5: <b>" + fmt(s.pm25, 1) + "</b> ug/m3 (" + esc(s.category) + ")<br>" +
+        "Fires within " + radiusKm + " km: <b>" + esc(s.fires_nearby) + "</b><br>" +
+        "Total fire power nearby: " + fmt(s.frp_nearby, 0) + " MW<br>" +
+        "Fire influence score: " + fmt(s.fire_influence, 0) + "<br>" +
+        "Nearest fire: " + fmt(s.nearest_fire_km, 1) + " km<br>" +
+        "<span style='color:#888'>Reading: " + esc(s.datetime_utc) + "</span>";
+    }
+
+    function showRadius(s, radiusKm) {
+      radiusLayer.clearLayers();
+      L.circle([s.latitude, s.longitude], {
+        radius: radiusKm * 1000, color: "#66ccff", weight: 1.5, fill: false, dashArray: "6 4",
+      }).addTo(radiusLayer);
+    }
+
+    function drawStations(stations, radiusKm) {
+      aqiLayer.clearLayers();
+      stations.forEach((s) => {
+        const m = L.circleMarker([s.latitude, s.longitude], {
+          radius: 6, color: "#222", fillColor: colorForPm25(s.pm25),
+          fillOpacity: 0.9, weight: 1,
+        }).bindPopup(stationPopup(s, radiusKm));
+        m.on("click", () => showRadius(s, radiusKm));
+        m.addTo(aqiLayer);
+      });
+    }
+
+    function drawSummary(sum) {
+      const rho = sum.spearman_fire_influence_vs_pm25;
+      document.getElementById("summary").innerHTML =
+        "<div><span class='big'>" + sum.fires.toLocaleString() + "</span> fires &middot; " +
+        "<span class='big'>" + sum.stations.toLocaleString() + "</span> stations</div>" +
+        "<div>" + sum.stations_with_fires_nearby + " stations have fires within " + sum.radius_km + " km</div>" +
+        "<div>Avg PM2.5 near fires: <b>" + fmt(sum.mean_pm25_near_fires, 1) + "</b> vs. no fires: <b>" +
+        fmt(sum.mean_pm25_no_fires, 1) + "</b> ug/m3</div>" +
+        "<div>Fire influence vs PM2.5 (Spearman &rho;): <b>" + fmt(rho, 2) + "</b></div>" +
+        "<div class='muted'>" + esc(sum.note) + "</div>" +
+        "<div class='muted'>Source: " + esc(sum.fire_source) + " &middot; updated " +
+        esc(new Date(sum.generated_at).toLocaleString()) + "</div>";
+    }
+
+    function drawHotspots(hotspots, radiusKm) {
+      const ul = document.getElementById("hotspots");
+      ul.innerHTML = "";
+      if (!hotspots.length) {
+        ul.innerHTML = "<li class='muted'>No hotspots for these settings.</li>";
+        return;
+      }
+      hotspots.forEach((s, i) => {
+        const li = document.createElement("li");
+        li.innerHTML =
+          "<b>#" + (i + 1) + "</b> " + fmt(s.latitude, 2) + "&deg;N, " + fmt(s.longitude, 2) + "&deg;E<br>" +
+          "<span class='swatch' style='background:" + colorForPm25(s.pm25) + "'></span>" +
+          "PM2.5 " + fmt(s.pm25, 0) + " (" + esc(s.category) + ") &middot; " +
+          s.fires_nearby + " fires &middot; influence " + fmt(s.fire_influence, 0);
+        li.onclick = () => {
+          map.flyTo([s.latitude, s.longitude], 8);
+          showRadius(s, radiusKm);
+          L.popup().setLatLng([s.latitude, s.longitude]).setContent(stationPopup(s, radiusKm)).openOn(map);
+        };
+        ul.appendChild(li);
+      });
+    }
+
+    async function load() {
+      const days = document.getElementById("days").value;
+      const radius = document.getElementById("radius").value;
+      const summaryEl = document.getElementById("summary");
+      summaryEl.textContent = "Loading...";
+      radiusLayer.clearLayers();
+
+      const firesReq = getJSON("/api/fires?days=" + days)
+        .then(drawFires)
+        .catch((e) => { summaryEl.innerHTML = "<span class='err'>Fire error: " + esc(e.message) + "</span>"; });
+
+      const analysisReq = getJSON("/api/analysis?days=" + days + "&radius_km=" + radius)
+        .then((a) => {
+          drawStations(a.stations, a.summary.radius_km);
+          drawSummary(a.summary);
+          drawHotspots(a.hotspots, a.summary.radius_km);
+        })
+        .catch((e) => {
+          summaryEl.innerHTML += "<div class='err'>Analysis error: " + esc(e.message) + "</div>";
+          document.getElementById("hotspots").innerHTML = "";
+        });
+
+      await Promise.all([firesReq, analysisReq]);
+    }
+
+    document.getElementById("days").addEventListener("change", load);
+    document.getElementById("radius").addEventListener("change", load);
 
     document.getElementById("legend").innerHTML =
-      "<b>Fire intensity</b><br>" +
-      "<span class='swatch' style='background:#ffe066'></span>low " +
-      "<span class='swatch' style='background:#ff2a00'></span>high<br>" +
-      "<b>PM2.5 (air quality)</b><br>" +
-      "<span class='swatch' style='background:#00b050'></span>good " +
-      "<span class='swatch' style='background:#ff7e00'></span>moderate " +
-      "<span class='swatch' style='background:#7e0023'></span>severe";
+      "<b>Fire intensity (FRP)</b><br>" +
+      [["#ffe066", "&lt;5"], ["#ffab00", "5-10"], ["#ff6a00", "10-20"], ["#ff2a00", "20+ MW"]]
+        .map(([c, l]) => "<span class='swatch' style='background:" + c + "'></span>" + l).join(" ") +
+      "<br><b>PM2.5 &ndash; India NAQI (ug/m3)</b><br>" +
+      NAQI.map(([u, c, name], i) =>
+        "<span class='swatch' style='background:" + c + "'></span>" + name +
+        " (" + (i === 0 ? "0" : NAQI[i - 1][0] + 1) + (u === Infinity ? "+" : "-" + u) + ")"
+      ).join("<br>");
+
+    load();
   </script>
 </body>
 </html>
