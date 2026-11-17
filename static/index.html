@@ -379,7 +379,7 @@
 
   // ------------------------------------------------------------------ map
   const map = L.map("map", { zoomControl: false, preferCanvas: true, minZoom: 4, maxZoom: 12, worldCopyJump: false,
-    maxBounds: [[-2, 55], [44, 110]], maxBoundsViscosity: 0.8, zoomSnap: 0.25 })
+    maxBounds: [[-20, 20], [55, 130]], maxBoundsViscosity: 0.6, zoomSnap: 0.25 })
     .setView([23, 80], 5);
   L.control.zoom({ position: "topright" }).addTo(map);
   const isMobile = () => window.innerWidth <= 820;
