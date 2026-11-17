@@ -17,9 +17,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # The satellite source is defined once here so it can be swapped in a single
-# place. VIIRS_SNPP_NRT is scheduled for retirement (Nov 2026); the successor
-# feeds are VIIRS_NOAA20_NRT / VIIRS_NOAA21_NRT.
-FIRMS_SOURCE = "VIIRS_SNPP_NRT"
+# place. VIIRS_SNPP_NRT is being retired (Nov 2026), so the default is the
+# successor feed VIIRS_NOAA20_NRT. Override with FIRMS_SOURCE in .env
+# (e.g. VIIRS_NOAA21_NRT or MODIS_NRT) without touching code.
+FIRMS_SOURCE = os.environ.get("FIRMS_SOURCE", "VIIRS_NOAA20_NRT")
 FIRMS_BASE = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
 
 # Bounding box covering India, formatted as "west,south,east,north".

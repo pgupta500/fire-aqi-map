@@ -105,12 +105,15 @@ def _clean(results: list) -> list:
 
         if lat is None or lon is None or value is None or dt is None:
             continue
-        if value < 0:
+        if not isinstance(value, (int, float)) or value < 0:
             continue
         if not (b["west"] <= lon <= b["east"] and b["south"] <= lat <= b["north"]):
             continue
 
-        reading_time = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+        try:
+            reading_time = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+        except ValueError:
+            continue
         if reading_time < cutoff:
             continue
 

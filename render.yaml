@@ -1,0 +1,23 @@
+# One-click deploy on Render: New > Blueprint > select this repo.
+# Set FIRMS_MAP_KEY and OPENAQ_API_KEY in the Render dashboard when prompted.
+services:
+  - type: web
+    name: fire-aqi-map
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 2 --threads 4 --timeout 120 --bind 0.0.0.0:$PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: FLASK_DEBUG
+        value: "0"
+      - key: FIRMS_MAP_KEY
+        sync: false
+      - key: OPENAQ_API_KEY
+        sync: false
+      - key: FIRMS_SOURCE
+        value: VIIRS_NOAA20_NRT
+      - key: CACHE_TTL_SECONDS
+        value: "1800"
