@@ -1,7 +1,7 @@
 """
 OpenAQ air quality data fetcher.
 
-Fetches current PM2.5 readings for India from the OpenAQ v3 API by paging
+Fetches current PM2.5 readings for South Asia from the OpenAQ v3 API by paging
 through the global latest-values feed, filtering to fresh, valid, in-country
 stations, and returning a clean pandas DataFrame. Raises AQIDataError on any
 malformed or unexpected response so downstream code never receives silently
@@ -15,19 +15,23 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
+from regions import SOUTH_ASIA_COUNTRIES, assign_regions
+
 load_dotenv()
 
 OPENAQ_BASE = "https://api.openaq.org/v3"
 PM25_PARAMETER_ID = 2
 
-# Bounding box covering India: (west, south, east, north).
-INDIA_BOUNDS = {"west": 68.0, "south": 6.0, "east": 98.0, "north": 38.0}
+# Bounding box covering South Asia: (west, south, east, north). Stations are
+# then filtered to South Asian countries by polygon (see regions.py).
+SOUTH_ASIA_BOUNDS = {"west": 60.0, "south": -2.0, "east": 98.0, "north": 39.0}
+INDIA_BOUNDS = SOUTH_ASIA_BOUNDS  # backwards-compatible name
 
 # Readings older than this are considered stale and dropped.
 MAX_AGE_DAYS = 2
 
 # The latest-values feed is global and paginated (max 1000 per page). We page
-# through it and keep only India points.
+# through it and keep only South Asia points.
 PAGE_SIZE = 1000
 MAX_PAGES = 25
 
@@ -48,14 +52,14 @@ def _headers() -> dict:
 
 def get_air_quality() -> pd.DataFrame:
     """
-    Fetch current PM2.5 station readings for India.
+    Fetch current PM2.5 station readings for South Asia.
 
     Returns:
         A validated DataFrame with columns:
         latitude, longitude, pm25, datetime_utc, location_id.
 
     Raises:
-        AQIDataError: If the requests fail or no valid India data is found.
+        AQIDataError: If the requests fail or no valid South Asia data is found.
     """
     url = f"{OPENAQ_BASE}/parameters/{PM25_PARAMETER_ID}/latest"
     rows = []
@@ -85,7 +89,7 @@ def get_air_quality() -> pd.DataFrame:
 
         rows.extend(_clean(results))
 
-    df = _dedupe(pd.DataFrame(rows))
+    df = _in_south_asia(_dedupe(pd.DataFrame(rows)))
     _validate(df)
     df["name"] = df["location_id"].map(_location_names())
     return df
@@ -93,7 +97,7 @@ def get_air_quality() -> pd.DataFrame:
 
 def _location_names() -> dict:
     """
-    {location_id: station name} for monitors in India, e.g.
+    {location_id: station name} for monitors in South Asia, e.g.
     "Anand Vihar, Delhi - DPCC". Names are a nice-to-have, so any failure
     here just returns {} instead of breaking the air quality layer.
     """
@@ -122,7 +126,7 @@ def _location_names() -> dict:
 
 
 def _clean(results: list) -> list:
-    """Keep only fresh, valid, in-India readings from one page."""
+    """Keep only fresh, valid, in-region readings from one page."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)
     b = INDIA_BOUNDS
     rows = []
@@ -161,6 +165,14 @@ def _clean(results: list) -> list:
     return rows
 
 
+def _in_south_asia(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop stations in the bounding box that are outside South Asia."""
+    if df.empty:
+        return df
+    _, country = assign_regions(df["latitude"], df["longitude"])
+    return df[pd.Series(country, index=df.index).isin(SOUTH_ASIA_COUNTRIES)].reset_index(drop=True)
+
+
 def _dedupe(df: pd.DataFrame) -> pd.DataFrame:
     """
     OpenAQ lists one row per *sensor*, so a station with two PM2.5 sensors
@@ -180,7 +192,7 @@ def _dedupe(df: pd.DataFrame) -> pd.DataFrame:
 def _validate(df: pd.DataFrame) -> None:
     """Raise AQIDataError if the cleaned data is empty or malformed."""
     if df.empty:
-        raise AQIDataError("No fresh, valid PM2.5 readings found for India.")
+        raise AQIDataError("No fresh, valid PM2.5 readings found for South Asia.")
 
     required = ["latitude", "longitude", "pm25", "datetime_utc"]
     missing = [c for c in required if c not in df.columns]
@@ -191,7 +203,7 @@ def _validate(df: pd.DataFrame) -> None:
 if __name__ == "__main__":
     try:
         aqi = get_air_quality()
-        print(f"Retrieved {len(aqi)} current PM2.5 stations for India.")
+        print(f"Retrieved {len(aqi)} current PM2.5 stations for South Asia.")
         print(aqi.head())
     except AQIDataError as e:
         print(f"Error: {e}")

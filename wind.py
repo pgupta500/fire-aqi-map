@@ -18,10 +18,20 @@ import requests
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
-# Grid covering India plus the upwind source areas in Pakistan.
-GRID_WEST, GRID_EAST = 64.0, 100.0
-GRID_SOUTH, GRID_NORTH = 4.0, 40.0
-GRID_STEP = float(os.environ.get("WIND_GRID_STEP", 2.0))
+# Grid covering South Asia with a margin so back-trajectories from border
+# monitors (and smoke arriving from Iran/Central Asia/Myanmar) stay inside.
+GRID_WEST, GRID_EAST = 52.5, 105.0
+GRID_SOUTH, GRID_NORTH = -5.0, 45.0
+GRID_STEP = float(os.environ.get("WIND_GRID_STEP", 2.5))
+
+# Coarse worldwide grid, only used to draw the wind animation everywhere.
+GLOBAL_STEP = 10.0
+GLOBAL_LATS = np.arange(-80.0, 80.0 + 1e-9, GLOBAL_STEP)
+GLOBAL_LONS = np.arange(-180.0, 180.0 - GLOBAL_STEP + 1e-9, GLOBAL_STEP)
+
+# Open-Meteo counts each location as one call, so long coordinate lists are
+# split into a few requests (also keeps URLs short).
+MAX_LOCATIONS_PER_REQUEST = 300
 
 # Days of past wind to fetch. Readings can be ~2 days old and trajectories run
 # up to 48 h back, so 4 days is always enough.
@@ -141,6 +151,34 @@ def _build_params(lats, lons):
     }
 
 
+def _chunks(params):
+    """Split one multi-location param set into several smaller requests."""
+    la = params["latitude"].split(",")
+    lo = params["longitude"].split(",")
+    for i in range(0, len(la), MAX_LOCATIONS_PER_REQUEST):
+        p = dict(params)
+        p["latitude"] = ",".join(la[i:i + MAX_LOCATIONS_PER_REQUEST])
+        p["longitude"] = ",".join(lo[i:i + MAX_LOCATIONS_PER_REQUEST])
+        yield p
+
+
+def _fetch(params):
+    payload = []
+    for p in _chunks(params):
+        try:
+            resp = requests.get(OPEN_METEO_URL, params=p, timeout=60)
+        except requests.RequestException as e:
+            raise WindDataError(f"Network error calling Open-Meteo: {e}") from e
+        if resp.status_code != 200:
+            raise WindDataError(f"Open-Meteo returned HTTP {resp.status_code}: {resp.text[:200]}")
+        try:
+            part = resp.json()
+        except ValueError as e:
+            raise WindDataError("Open-Meteo did not return JSON") from e
+        payload.extend(part if isinstance(part, list) else [part])
+    return payload
+
+
 def parse_response(payload, lats, lons) -> WindField:
     """Turn Open-Meteo's multi-location JSON list into a WindField."""
     ny, nx = len(lats), len(lons)
@@ -161,10 +199,13 @@ def parse_response(payload, lats, lons) -> WindField:
             hr = loc["hourly"]
             s10 = np.array(hr["wind_speed_10m"], dtype=float)
             d10 = np.array(hr["wind_direction_10m"], dtype=float)
-            s925 = np.array(hr["wind_speed_925hPa"], dtype=float)
-            d925 = np.array(hr["wind_direction_925hPa"], dtype=float)
             u10, v10 = speed_dir_to_uv(s10, d10)
-            u9, v9 = speed_dir_to_uv(s925, d925)
+            if "wind_speed_925hPa" in hr:
+                s925 = np.array(hr["wind_speed_925hPa"], dtype=float)
+                d925 = np.array(hr["wind_direction_925hPa"], dtype=float)
+                u9, v9 = speed_dir_to_uv(s925, d925)
+            else:
+                u9 = v9 = np.full_like(u10, np.nan)
             if (loc.get("elevation") or 0) > HIGH_TERRAIN_M:
                 uu, vv = u10, v10
             else:
@@ -187,18 +228,17 @@ def parse_response(payload, lats, lons) -> WindField:
 def get_wind(step: float = GRID_STEP) -> WindField:
     """Fetch the hourly transport-wind field for South Asia."""
     lats, lons = grid_axes(step)
-    try:
-        # ~360 points fit comfortably in one GET (~2.5 KB URL).
-        resp = requests.get(OPEN_METEO_URL, params=_build_params(lats, lons), timeout=60)
-    except requests.RequestException as e:
-        raise WindDataError(f"Network error calling Open-Meteo: {e}") from e
-    if resp.status_code != 200:
-        raise WindDataError(f"Open-Meteo returned HTTP {resp.status_code}: {resp.text[:200]}")
-    try:
-        payload = resp.json()
-    except ValueError as e:
-        raise WindDataError("Open-Meteo did not return JSON") from e
-    return parse_response(payload, lats, lons)
+    return parse_response(_fetch(_build_params(lats, lons)), lats, lons)
+
+
+def get_global_wind() -> WindField:
+    """
+    Fetch today's hourly 10 m wind on a coarse 10-degree worldwide grid.
+    Only used to draw the wind animation outside South Asia.
+    """
+    params = _build_params(GLOBAL_LATS, GLOBAL_LONS)
+    params.update(hourly="wind_speed_10m,wind_direction_10m", past_days=0)
+    return parse_response(_fetch(params), GLOBAL_LATS, GLOBAL_LONS)
 
 
 if __name__ == "__main__":

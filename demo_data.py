@@ -10,7 +10,7 @@ city locations. None of it is real data; the UI shows a DEMO banner.
 import numpy as np
 import pandas as pd
 
-from wind import WindField, grid_axes, speed_dir_to_uv
+from wind import GLOBAL_LATS, GLOBAL_LONS, WindField, grid_axes, speed_dir_to_uv
 
 CITIES = [
     ("Delhi", 28.61, 77.21, 18), ("Gurugram", 28.46, 77.03, 4), ("Noida", 28.54, 77.39, 4),
@@ -27,6 +27,11 @@ CITIES = [
     ("Raipur", 21.25, 81.63, 2), ("Bhubaneswar", 20.30, 85.82, 2), ("Hyderabad", 17.39, 78.49, 7),
     ("Visakhapatnam", 17.69, 83.22, 2), ("Bengaluru", 12.97, 77.59, 9), ("Chennai", 13.08, 80.27, 7),
     ("Kochi", 9.93, 76.27, 2), ("Thiruvananthapuram", 8.52, 76.94, 2), ("Coimbatore", 11.02, 76.96, 2),
+    ("Lahore", 31.55, 74.34, 6), ("Faisalabad", 31.42, 73.08, 2), ("Islamabad", 33.68, 73.05, 3),
+    ("Peshawar", 34.01, 71.58, 2), ("Karachi", 24.86, 67.01, 5), ("Multan", 30.20, 71.47, 2),
+    ("Kabul", 34.53, 69.17, 2), ("Kathmandu", 27.71, 85.32, 3), ("Dhaka", 23.81, 90.41, 6),
+    ("Chattogram", 22.36, 91.78, 2), ("Rajshahi", 24.37, 88.60, 1), ("Thimphu", 27.47, 89.64, 1),
+    ("Colombo", 6.93, 79.85, 3), ("Kandy", 7.29, 80.63, 1), ("Male", 4.18, 73.51, 1),
     ("Guwahati", 26.14, 91.74, 3), ("Shillong", 25.58, 91.89, 1), ("Siliguri", 26.73, 88.40, 1),
     ("Ranchi", 23.34, 85.31, 2), ("Srinagar", 34.08, 74.80, 1), ("Jammu", 32.73, 74.86, 1),
 ]
@@ -59,6 +64,18 @@ def demo_wind(now: np.datetime64) -> WindField:
         uu, vv = speed_dir_to_uv(speed * diurnal, direction + 8 * np.sin(h / 9))
         u[i], v[i] = uu, vv
     return WindField(lats=lats, lons=lons, times=times, u=u, v=v)
+
+
+def demo_world_wind(now: np.datetime64) -> WindField:
+    """Idealised global circulation (trades, westerlies, waves) for the map."""
+    times = (now.astype("datetime64[h]") + np.arange(-2, 3).astype("timedelta64[h]")).astype("datetime64[s]")
+    LA, LO = np.meshgrid(GLOBAL_LATS, GLOBAL_LONS, indexing="ij")
+    lat, lon = np.radians(LA), np.radians(LO)
+    u0 = -7 * np.cos(3 * lat) + 2 * np.sin(2 * lon) * np.cos(lat)
+    v0 = 3 * np.sin(3 * lon) * np.cos(lat)
+    u = np.repeat(u0[None], len(times), axis=0)
+    v = np.repeat(v0[None], len(times), axis=0)
+    return WindField(lats=GLOBAL_LATS, lons=GLOBAL_LONS, times=times, u=u, v=v)
 
 
 def demo_fires(now: np.datetime64, days: int = 5, seed: int = 7) -> pd.DataFrame:

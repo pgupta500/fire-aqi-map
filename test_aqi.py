@@ -105,3 +105,19 @@ def test_duplicate_sensors_collapse_to_one_station(monkeypatch):
     df = aqi.get_air_quality()
     assert len(df) == 2
     assert df.loc[df["location_id"] == 7, "pm25"].item() == 200.0
+
+
+def test_stations_outside_south_asia_are_dropped(monkeypatch):
+    monkeypatch.setenv("OPENAQ_API_KEY", "test")
+    kabul = dict(reading(lat=34.53, lon=69.17), locationsId=1)
+    dhaka = dict(reading(lat=23.81, lon=90.41), locationsId=2)
+    tehran_box = dict(reading(lat=30.3, lon=61.0), locationsId=3)   # Iran, inside bbox
+
+    def fake_get(url, headers, params, timeout):
+        if url.endswith("/latest") and params["page"] == 1:
+            return FakeResp(200, {"results": [kabul, dhaka, tehran_box]})
+        return FakeResp(404)
+
+    monkeypatch.setattr(aqi.requests, "get", fake_get)
+    df = aqi.get_air_quality()
+    assert sorted(df["location_id"]) == [1, 2]

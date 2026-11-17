@@ -1,5 +1,6 @@
 """
-Point -> region lookup (Indian states/UTs, Pakistani provinces, and
+Point -> region lookup for South Asia (Indian states/UTs, Pakistani
+provinces, Bangladeshi divisions, other South Asian countries, and
 neighbouring countries) using the bundled data/regions.geojson
 (Natural Earth 1:10m admin-1, public domain, simplified).
 """
@@ -14,6 +15,10 @@ from shapely.geometry import shape
 
 REGIONS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "regions.geojson")
 UNKNOWN = "Outside mapped area"
+
+SOUTH_ASIA_COUNTRIES = {
+    "India", "Pakistan", "Bangladesh", "Nepal", "Bhutan", "Sri Lanka", "Maldives", "Afghanistan",
+}
 
 
 @lru_cache(maxsize=1)

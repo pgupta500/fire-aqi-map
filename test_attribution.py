@@ -83,6 +83,43 @@ def test_assign_regions_known_places():
     assert names[4] == UNKNOWN
 
 
+def test_assign_regions_rest_of_south_asia():
+    names, countries = assign_regions(
+        [23.81, 27.71, 6.93, 34.53, 27.47, 4.18, 35.69],
+        [90.41, 85.32, 79.85, 69.17, 89.64, 73.51, 51.39],
+    )
+    assert list(names[:6]) == ["Dhaka (Bangladesh)", "Nepal", "Sri Lanka", "Afghanistan",
+                               "Bhutan", "Maldives"]
+    assert countries[6] != "India" and names[6] in {"Iran", UNKNOWN}
+
+
+def test_wind_requests_are_chunked(monkeypatch):
+    import wind
+    calls = []
+
+    class R:
+        status_code = 200
+
+        def __init__(self, n):
+            self.n = n
+
+        def json(self):
+            hourly = {"time": ["2026-11-15T00:00", "2026-11-15T01:00"],
+                      "wind_speed_10m": [1, 1], "wind_direction_10m": [90, 90]}
+            return [{"elevation": 0, "hourly": hourly}] * self.n
+
+    def fake_get(url, params, timeout):
+        n = len(params["latitude"].split(","))
+        calls.append(n)
+        return R(n)
+
+    monkeypatch.setattr(wind.requests, "get", fake_get)
+    w = wind.get_global_wind()
+    assert sum(calls) == len(wind.GLOBAL_LATS) * len(wind.GLOBAL_LONS)
+    assert max(calls) <= wind.MAX_LOCATIONS_PER_REQUEST and len(calls) > 1
+    assert w.u.shape == (2, len(wind.GLOBAL_LATS), len(wind.GLOBAL_LONS))
+
+
 # ---- trajectories ------------------------------------------------------------
 
 def test_back_trajectory_goes_upwind():

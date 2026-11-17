@@ -18,7 +18,7 @@ from attribution import DEFAULT_HOURS, attribute, station_detail
 from cache import TTLCache
 from correlate import DEFAULT_RADIUS_KM, find_hotspots, spearman, station_fire_exposure, summarize
 from fires import FIRMS_SOURCE, OPTIONAL_COLUMNS, REQUIRED_COLUMNS, FireDataError, get_fires
-from wind import WindDataError, get_wind
+from wind import WindDataError, get_global_wind, get_wind
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -29,6 +29,10 @@ CORS(app)
 # Upstream data changes slowly; cache it so page loads are fast and we stay
 # well inside the free API quotas. Override with CACHE_TTL_SECONDS.
 _cache = TTLCache(ttl_seconds=float(os.environ.get("CACHE_TTL_SECONDS", 1800)))
+# Wind changes slowly and Open-Meteo's free tier counts every grid point as a
+# call, so wind is cached longer (3 h regional, 6 h worldwide).
+_wind_cache = TTLCache(ttl_seconds=float(os.environ.get("WIND_CACHE_TTL_SECONDS", 10800)))
+_global_wind_cache = TTLCache(ttl_seconds=21600)
 
 UPSTREAM_ERRORS = (FireDataError, AQIDataError, WindDataError)
 
@@ -92,7 +96,11 @@ def _aqi():
 def _wind():
     if DEMO_MODE:
         return _demo()[2]
-    return _cache.get_or_set("wind", get_wind)
+    return _wind_cache.get_or_set("wind", get_wind)
+
+
+def _global_wind():
+    return _global_wind_cache.get_or_set("global", get_global_wind)
 
 
 def _attribution(days: int, hours: int):
@@ -155,12 +163,25 @@ def aqi_endpoint():
 
 @app.route("/api/wind")
 def wind_endpoint():
-    """Transport-wind grid (u/v m/s) for the hour nearest now."""
+    """
+    Wind for the hour nearest now (u/v in m/s) for drawing the animation:
+    a fine South Asia grid plus a coarse worldwide grid. The worldwide grid is
+    optional; if it fails the map just animates South Asia.
+    """
+    now = np.datetime64(datetime.now(timezone.utc).replace(tzinfo=None), "s")
     try:
-        w = _wind()
+        regional = _wind().snapshot(now)
     except WindDataError as e:
         return _error(str(e))
-    return jsonify(w.snapshot(np.datetime64(datetime.now(timezone.utc).replace(tzinfo=None), "s")))
+    try:
+        if DEMO_MODE:
+            from demo_data import demo_world_wind
+            world = demo_world_wind(now.astype("datetime64[h]").astype("datetime64[s]")).snapshot(now)
+        else:
+            world = _global_wind().snapshot(now)
+    except WindDataError:
+        world = None
+    return jsonify(dict(regional, regional=regional, world=world))
 
 
 @app.route("/api/attribution")

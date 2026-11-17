@@ -23,8 +23,10 @@ load_dotenv()
 FIRMS_SOURCE = os.environ.get("FIRMS_SOURCE", "VIIRS_NOAA20_NRT")
 FIRMS_BASE = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
 
-# Bounding box covering India, formatted as "west,south,east,north".
-INDIA_BBOX = "68,6,98,38"
+# Bounding box covering South Asia (Afghanistan to Bangladesh, plus the Maldives
+# and fire-prone western Myanmar), formatted as "west,south,east,north".
+SOUTH_ASIA_BBOX = "60,-2,101,39"
+INDIA_BBOX = SOUTH_ASIA_BBOX  # backwards-compatible name
 
 # Columns the rest of the application depends on.
 REQUIRED_COLUMNS = ["latitude", "longitude", "acq_date", "confidence", "frp"]
@@ -41,12 +43,12 @@ def _build_url(map_key: str, bbox: str, day_range: int) -> str:
     return f"{FIRMS_BASE}/{map_key}/{FIRMS_SOURCE}/{bbox}/{day_range}"
 
 
-def get_fires(bbox: str = INDIA_BBOX, day_range: int = 5) -> pd.DataFrame:
+def get_fires(bbox: str = SOUTH_ASIA_BBOX, day_range: int = 5) -> pd.DataFrame:
     """
     Fetch active fire detections from NASA FIRMS for a bounding box.
 
     Args:
-        bbox: Bounding box as "west,south,east,north". Defaults to India.
+        bbox: Bounding box as "west,south,east,north". Defaults to South Asia.
         day_range: Number of days back from today (1-5, per the API limit).
 
     Returns:
@@ -114,7 +116,7 @@ def _validate(df: pd.DataFrame) -> None:
 if __name__ == "__main__":
     try:
         fires = get_fires()
-        print(f"Retrieved {len(fires)} fire detections for India (last 5 days).")
+        print(f"Retrieved {len(fires)} fire detections for South Asia (last 5 days).")
         print(fires[REQUIRED_COLUMNS].head())
     except FireDataError as e:
         print(f"Error: {e}")
