@@ -441,7 +441,7 @@
       if (!state.regionsGeo) state.regionsGeo = await getJSON("/api/regions").catch(() => null);
       render();
       if (first) loader.classList.add("hide");
-      if (!state.wind) getJSON("/api/wind").then((w) => { state.wind = w; wind.setField(w); }).catch(() => {});
+      if (!state.wind) loadWind();
     } catch (e) {
       if (first) {
         loaderMsg.innerHTML = `<span class="err">Couldn't load the data: ${esc(e.message)}</span>`;
@@ -457,6 +457,15 @@
       if (tick) clearInterval(tick);
       miniload(false);
     }
+  }
+
+  // Wind: the worldwide grid can briefly fail on Open-Meteo's per-minute
+  // limit right after the regional fetch, so retry it a few times.
+  function loadWind(tries = 0) {
+    getJSON("/api/wind").then((w) => {
+      state.wind = w; wind.setField(w);
+      if (!w.world && tries < 4) setTimeout(() => loadWind(tries + 1), 70000);
+    }).catch(() => { if (tries < 4) setTimeout(() => loadWind(tries + 1), 70000); });
   }
 
   // ------------------------------------------------------------------ render
