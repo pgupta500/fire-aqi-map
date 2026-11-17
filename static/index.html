@@ -393,13 +393,14 @@
   const svgFlows = L.svg({ pane: "flowsPane", padding: 0.5 });
   const svgTraj = L.svg({ pane: "trajPane", padding: 0.5 });
 
-  const carto = (style) => L.tileLayer(`https://{s}.basemaps.cartocdn.com/${style}/{z}/{x}/{y}{r}.png`,
-    { subdomains: "abcd", maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>' });
+  // Esri canvas basemaps: free, no API key. Labels go in a pane above the data.
+  const esri = (svc, opts = {}) => L.tileLayer(`https://server.arcgisonline.com/ArcGIS/rest/services/${svc}/MapServer/tile/{z}/{y}/{x}`,
+    Object.assign({ maxZoom: 16, attribution: "Basemap &copy; Esri" }, opts));
   const bases = {
-    dark: [carto("dark_nolabels"), L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png", { subdomains: "abcd", pane: "labels", opacity: 0.75 })],
-    light: [carto("light_nolabels"), L.tileLayer("https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png", { subdomains: "abcd", pane: "labels" })],
-    sat: [L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Imagery &copy; Esri" }),
-          L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png", { subdomains: "abcd", pane: "labels", opacity: 0.8 })],
+    dark: [esri("Canvas/World_Dark_Gray_Base"), esri("Canvas/World_Dark_Gray_Reference", { pane: "labels", opacity: 0.8, attribution: "" })],
+    light: [esri("Canvas/World_Light_Gray_Base"), esri("Canvas/World_Light_Gray_Reference", { pane: "labels", attribution: "" })],
+    sat: [esri("World_Imagery", { maxZoom: 18, attribution: "Imagery &copy; Esri" }),
+          esri("Reference/World_Boundaries_and_Places", { pane: "labels", opacity: 0.85, attribution: "" })],
   };
   let currentBase = "dark";
   bases.dark.forEach((l) => l.addTo(map));
