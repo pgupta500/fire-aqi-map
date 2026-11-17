@@ -25,8 +25,11 @@ GRID_SOUTH, GRID_NORTH = -5.0, 45.0
 GRID_STEP = float(os.environ.get("WIND_GRID_STEP", 2.5))
 
 # Coarse worldwide grid, only used to draw the wind animation everywhere.
-GLOBAL_STEP = 10.0
-GLOBAL_LATS = np.arange(-80.0, 80.0 + 1e-9, GLOBAL_STEP)
+# 15 degrees = 264 points. Open-Meteo's free tier allows ~600 locations per
+# minute, so if this runs right after the regional fetch (462 points) it can
+# be rate-limited once; the page simply retries a minute later.
+GLOBAL_STEP = 15.0
+GLOBAL_LATS = np.arange(-75.0, 75.0 + 1e-9, GLOBAL_STEP)
 GLOBAL_LONS = np.arange(-180.0, 180.0 - GLOBAL_STEP + 1e-9, GLOBAL_STEP)
 
 # Open-Meteo counts each location as one call, so long coordinate lists are
@@ -233,7 +236,7 @@ def get_wind(step: float = GRID_STEP) -> WindField:
 
 def get_global_wind() -> WindField:
     """
-    Fetch today's hourly 10 m wind on a coarse 10-degree worldwide grid.
+    Fetch today's hourly 10 m wind on a coarse 15-degree worldwide grid.
     Only used to draw the wind animation outside South Asia.
     """
     params = _build_params(GLOBAL_LATS, GLOBAL_LONS)

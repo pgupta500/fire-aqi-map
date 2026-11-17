@@ -114,10 +114,17 @@ def test_wind_requests_are_chunked(monkeypatch):
         return R(n)
 
     monkeypatch.setattr(wind.requests, "get", fake_get)
-    w = wind.get_global_wind()
-    assert sum(calls) == len(wind.GLOBAL_LATS) * len(wind.GLOBAL_LONS)
+    lats, lons = wind.grid_axes()
+    w = wind.get_wind()
+    assert sum(calls) == len(lats) * len(lons)
     assert max(calls) <= wind.MAX_LOCATIONS_PER_REQUEST and len(calls) > 1
-    assert w.u.shape == (2, len(wind.GLOBAL_LATS), len(wind.GLOBAL_LONS))
+    assert w.u.shape == (2, len(lats), len(lons))
+
+    calls.clear()
+    g = wind.get_global_wind()
+    assert g.u.shape == (2, len(wind.GLOBAL_LATS), len(wind.GLOBAL_LONS))
+    # The world grid alone must fit one request and Open-Meteo's ~600/minute limit.
+    assert len(calls) == 1 and sum(calls) < 600
 
 
 # ---- trajectories ------------------------------------------------------------

@@ -173,15 +173,18 @@ def wind_endpoint():
         regional = _wind().snapshot(now)
     except WindDataError as e:
         return _error(str(e))
+    world_error = None
     try:
         if DEMO_MODE:
             from demo_data import demo_world_wind
             world = demo_world_wind(now.astype("datetime64[h]").astype("datetime64[s]")).snapshot(now)
         else:
             world = _global_wind().snapshot(now)
-    except WindDataError:
-        world = None
-    return jsonify(dict(regional, regional=regional, world=world))
+    except WindDataError as e:
+        # Usually Open-Meteo's per-minute limit right after the regional
+        # fetch; the page retries a minute later.
+        world, world_error = None, str(e)
+    return jsonify(dict(regional, regional=regional, world=world, world_error=world_error))
 
 
 @app.route("/api/attribution")
