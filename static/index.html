@@ -361,12 +361,87 @@
     return d.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) + " IST";
   };
 
-  async function getJSON(url) {
-    const r = await fetch(url);
+  async function getJSON(url, opts) {
+    const r = await fetch(url, opts);
     let data;
     try { data = await r.json(); } catch { throw new Error("Bad response from " + url); }
-    if (!r.ok || (data && data.error)) throw new Error((data && data.error) || "HTTP " + r.status);
+    if (!r.ok || (data && data.error)) {
+      const err = new Error((data && data.error) || "HTTP " + r.status);
+      err.status = r.status; err.body = data;
+      throw err;
+    }
     return data;
+  }
+
+  // ------------------------------------------------------------------ Open-Meteo in the browser
+  // Open-Meteo's free tier is limited per IP, and the server's IP is shared
+  // with other apps. When the server is rate-limited, the page fetches the
+  // wind itself (counting against the visitor's own, unused quota).
+  const OM_URL = "https://api.open-meteo.com/v1/forecast";
+  async function fetchOpenMeteoGrid(lats, lons, hourly, pastDays, maxPer = 300) {
+    const la = [], lo = [];
+    for (const y of lats) for (const x of lons) { la.push(y); lo.push(x); }
+    const out = [];
+    for (let i = 0; i < la.length; i += maxPer) {
+      const q = new URLSearchParams({
+        latitude: la.slice(i, i + maxPer).join(","), longitude: lo.slice(i, i + maxPer).join(","),
+        hourly: hourly.join(","), wind_speed_unit: "ms", past_days: pastDays, forecast_days: 1, timezone: "GMT",
+      });
+      const r = await fetch(`${OM_URL}?${q}`);
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j || j.error) throw new Error("Open-Meteo: " + ((j && j.reason) || "HTTP " + r.status));
+      out.push(...(Array.isArray(j) ? j : [j]));
+    }
+    if (out.length !== la.length) throw new Error("Open-Meteo returned an incomplete grid");
+    return out;
+  }
+  const toUV = (s, d) => { const r = (d * Math.PI) / 180; return [-s * Math.sin(r), -s * Math.cos(r)]; };
+  // Same transport-wind rule as the server: mean of 10 m and 925 hPa, 10 m only over high terrain.
+  function gridFromOpenMeteo(locs, lats, lons, highTerrain = 700) {
+    const nt = locs[0].hourly.time.length, ny = lats.length, nx = lons.length;
+    const u = [], v = [];
+    for (let t = 0; t < nt; t++) {
+      const ur = [], vr = [];
+      for (let y = 0; y < ny; y++) {
+        const uu = [], vv = [];
+        for (let x = 0; x < nx; x++) {
+          const h = locs[y * nx + x].hourly, elev = locs[y * nx + x].elevation || 0;
+          const s10 = h.wind_speed_10m[t], d10 = h.wind_direction_10m[t];
+          const s9 = h.wind_speed_925hPa ? h.wind_speed_925hPa[t] : null, d9 = h.wind_direction_925hPa ? h.wind_direction_925hPa[t] : null;
+          const a = s10 != null && d10 != null ? toUV(s10, d10) : null;
+          const b = elev <= highTerrain && s9 != null && d9 != null ? toUV(s9, d9) : null;
+          const w = a && b ? [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] : a || b || [0, 0];
+          uu.push(Math.round(w[0] * 100) / 100); vv.push(Math.round(w[1] * 100) / 100);
+        }
+        ur.push(uu); vr.push(vv);
+      }
+      u.push(ur); v.push(vr);
+    }
+    return { lats, lons, t0: locs[0].hourly.time[0] + ":00", u, v };
+  }
+  function snapshotNow(g) {
+    const hrs = Math.round((Date.now() - Date.parse(g.t0 + "Z")) / 3600000);
+    const i = Math.max(0, Math.min(g.u.length - 1, hrs));
+    return { lats: g.lats, lons: g.lons, u: g.u[i], v: g.v[i] };
+  }
+  async function browserWind(spec) {
+    const locs = await fetchOpenMeteoGrid(spec.lats, spec.lons, spec.hourly, spec.past_days, spec.max_locations_per_request);
+    return gridFromOpenMeteo(locs, spec.lats, spec.lons, spec.high_terrain_m);
+  }
+  // Coarse worldwide wind for the animation, cached in this browser for 3 h.
+  async function worldWind() {
+    const KEY = "smoketrail.world-wind.v1";
+    try {
+      const c = JSON.parse(localStorage.getItem(KEY) || "null");
+      if (c && Date.now() - c.at < 3 * 3600000) return snapshotNow(c.g);
+    } catch {}
+    const lats = [], lons = [];
+    for (let y = -75; y <= 75; y += 15) lats.push(y);
+    for (let x = -180; x < 180; x += 15) lons.push(x);
+    const locs = await fetchOpenMeteoGrid(lats, lons, ["wind_speed_10m", "wind_direction_10m"], 0);
+    const g = gridFromOpenMeteo(locs, lats, lons);
+    try { localStorage.setItem(KEY, JSON.stringify({ at: Date.now(), g })); } catch {}
+    return snapshotNow(g);
   }
 
   // ------------------------------------------------------------------ state
@@ -433,11 +508,22 @@
     let mi = 0; const tick = first ? setInterval(() => setLoader(msgs[Math.min(++mi, msgs.length - 1)]), 2200) : null;
 
     try {
-      const [att, fires] = await Promise.all([
-        getJSON(`/api/attribution?days=${days}&hours=${hours}`),
-        getJSON(`/api/fires?days=${days}`).catch(() => []),
-      ]);
-      state.att = att; state.fires = fires;
+      const firesReq = getJSON(`/api/fires?days=${days}`).catch(() => []);
+      let att;
+      const url = `/api/attribution?days=${days}&hours=${hours}`;
+      try {
+        att = state.clientWind
+          ? await getJSON(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wind: state.clientWind }) })
+          : await getJSON(url);
+      } catch (e) {
+        if (!(e.body && e.body.wind_unavailable)) throw e;
+        // Server can't reach Open-Meteo: fetch the wind from this browser instead.
+        if (first) setLoader("Server's wind source is busy, fetching wind from your browser…");
+        state.clientWind = await browserWind(e.body.wind_grid);
+        att = await getJSON(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wind: state.clientWind }) });
+      }
+      const fires = await firesReq;
+      state.att = att; state.fires = fires; state.windKey = att.wind_key || null;
       if (!state.regionsGeo) state.regionsGeo = await getJSON("/api/regions").catch(() => null);
       render();
       if (first) loader.classList.add("hide");
@@ -461,11 +547,13 @@
 
   // Wind: the worldwide grid can briefly fail on Open-Meteo's per-minute
   // limit right after the regional fetch, so retry it a few times.
-  function loadWind(tries = 0) {
-    getJSON("/api/wind").then((w) => {
-      state.wind = w; wind.setField(w);
-      if (!w.world && tries < 4) setTimeout(() => loadWind(tries + 1), 70000);
-    }).catch(() => { if (tries < 4) setTimeout(() => loadWind(tries + 1), 70000); });
+  function loadWind() {
+    state.wind = true;
+    const regional = state.clientWind
+      ? Promise.resolve(snapshotNow(state.clientWind))
+      : getJSON("/api/wind").catch(() => null);
+    regional.then((r) => { if (r) wind.setRegional(r); });
+    worldWind().then((w) => wind.setWorld(w)).catch(() => {});
   }
 
   // ------------------------------------------------------------------ render
@@ -482,7 +570,7 @@
     renderFires();
     renderStations(stations);
     renderFlows(flows);
-    $("#foot").innerHTML = `Updated ${esc(istTime(summary.generated_at))} · Fires: NASA FIRMS ${esc(summary.fire_source)} · PM2.5: OpenAQ · Wind: Open-Meteo`;
+    $("#foot").innerHTML = `Updated ${esc(istTime(summary.generated_at))} · Fires: NASA FIRMS ${esc(summary.fire_source)} · PM2.5: OpenAQ · Wind: Open-Meteo${summary.wind_from_browser ? " (fetched by your browser)" : ""}`;
     if (state.selectedStation != null) openStation(state.selectedStation, false);
     if (state.selectedRegion) selectRegion(state.selectedRegion, false);
   }
@@ -734,7 +822,14 @@
     openDetail(); bindStationCard(s);
     if (fly) map.flyTo([s.latitude, s.longitude], Math.max(map.getZoom(), 6), { duration: 0.8 });
     try {
-      const det = await getJSON(`/api/station/${id}?days=${state.days}&hours=${state.hours}`);
+      const wk = state.windKey ? `&wind_key=${encodeURIComponent(state.windKey)}` : "";
+      let det;
+      try {
+        det = await getJSON(`/api/station/${id}?days=${state.days}&hours=${state.hours}${wk}`);
+      } catch (e) {
+        if (e.status === 409 || (e.body && e.body.wind_unavailable)) { await loadAll(); return; }
+        throw e;
+      }
       if (req !== stationReq) return;
       drawTrajectory(det, fly);
       d.innerHTML = stationCardHTML(s, det); bindStationCard(s);
@@ -937,7 +1032,8 @@
     map.on("moveend zoomend resize", () => { if (state.layers.wind) start(); });
     document.addEventListener("visibilitychange", () => (document.hidden ? stop() : start()));
     return {
-      setField(w) { reg = w.regional || (w.u ? w : null); world = w.world || null; start(); },
+      setRegional(w) { reg = w; start(); },
+      setWorld(w) { world = w; start(); },
       start, stop,
     };
   })();
